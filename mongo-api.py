@@ -1,25 +1,28 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pymongo import MongoClient, DESCENDING
 from datetime import datetime
 from bson import ObjectId
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
+# CORS manual via middleware
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    if request.method == "OPTIONS":
+        response = JSONResponse(content={}, status_code=200)
+    else:
+        response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
 
-# ── Conexión MongoDB (URI de la universidad) ─────────────────
 client = MongoClient("mongodb://ISIS2304D21202610:uglfhwtSyjrx@157.253.236.88:8087/")
-db     = client["ISIS2304D21202610"]
-col    = db["resenias"]
+db  = client["ISIS2304D21202610"]
+col = db["resenias"]
 
-# ── Helper: ObjectId → string para JSON ─────────────────────
 def serial(doc):
     if doc is None:
         return None
@@ -35,20 +38,10 @@ def serial(doc):
                 v["fecha"] = v["fecha"].isoformat()
     return doc
 
-
-# ════════════════════════════════════════════════════════════
-# HEALTH CHECK
-# ════════════════════════════════════════════════════════════
 @app.get("/")
 def inicio():
     return {"estado": "API Dann-Alpes funcionando correctamente"}
 
-
-# ════════════════════════════════════════════════════════════
-# RF1 – Crear reseña
-# POST /resenas
-# Body: { hotel_id, cliente_id, reserva_id, calificacion, comentario }
-# ════════════════════════════════════════════════════════════
 @app.post("/resenas")
 def crear_resena(datos: dict):
     reserva_id = datos.get("reserva_id")
@@ -70,12 +63,6 @@ def crear_resena(datos: dict):
     result = col.insert_one(doc)
     return {"mensaje": "Reseña creada", "id": str(result.inserted_id)}
 
-
-# ════════════════════════════════════════════════════════════
-# RF2 – Editar reseña (cliente)
-# PUT /resenas/{resena_id}
-# Body: { calificacion, comentario }
-# ════════════════════════════════════════════════════════════
 @app.put("/resenas/{resena_id}")
 def editar_resena(resena_id: str, datos: dict):
     result = col.update_one(
@@ -90,11 +77,6 @@ def editar_resena(resena_id: str, datos: dict):
         raise HTTPException(status_code=404, detail="Reseña no encontrada o ya eliminada")
     return {"mensaje": "Reseña actualizada"}
 
-
-# ════════════════════════════════════════════════════════════
-# RF3 – Eliminar reseña (cliente)
-# DELETE /resenas/{resena_id}
-# ════════════════════════════════════════════════════════════
 @app.delete("/resenas/{resena_id}")
 def eliminar_resena(resena_id: str):
     result = col.update_one(
@@ -105,34 +87,20 @@ def eliminar_resena(resena_id: str):
         raise HTTPException(status_code=404, detail="Reseña no encontrada")
     return {"mensaje": "Reseña eliminada"}
 
-
-# ════════════════════════════════════════════════════════════
-# RF4 – Consultar reseñas de un hotel (público, paginado)
-# GET /hoteles/{hotel_id}/resenas?orden=fecha|utilidad&pagina=1&por_pagina=10
-# ════════════════════════════════════════════════════════════
 @app.get("/hoteles/{hotel_id}/resenas")
 def get_resenas_hotel(hotel_id: int, orden: str = "fecha", pagina: int = 1, por_pagina: int = 10):
     campo = "fecha" if orden == "fecha" else "utilidad"
     skip  = (pagina - 1) * por_pagina
-
     destacada = col.find_one({"hotel_id": hotel_id, "estado": "PUBLICADA", "destacada": True})
     cursor = col.find(
         {"hotel_id": hotel_id, "estado": "PUBLICADA", "destacada": {"$ne": True}}
     ).sort(campo, DESCENDING).skip(skip).limit(por_pagina)
-
     resenas = [serial(r) for r in cursor]
     if destacada and pagina == 1:
         resenas.insert(0, serial(destacada))
-
     total = col.count_documents({"hotel_id": hotel_id, "estado": "PUBLICADA"})
     return {"total": total, "pagina": pagina, "resenas": resenas}
 
-
-# ════════════════════════════════════════════════════════════
-# RF5 – Marcar reseña como útil
-# POST /resenas/{resena_id}/votos
-# Body: { cliente_id }
-# ════════════════════════════════════════════════════════════
 @app.post("/resenas/{resena_id}/votos")
 def votar_resena(resena_id: str, datos: dict):
     cliente_id = int(datos.get("cliente_id"))
@@ -149,23 +117,12 @@ def votar_resena(resena_id: str, datos: dict):
         raise HTTPException(status_code=404, detail="Reseña no encontrada")
     return {"mensaje": "Voto registrado"}
 
-
-# ════════════════════════════════════════════════════════════
-# RF6 – Historial de reseñas del cliente
-# GET /clientes/{cliente_id}/resenas?orden=fecha|hotel
-# ════════════════════════════════════════════════════════════
 @app.get("/clientes/{cliente_id}/resenas")
 def historial_cliente(cliente_id: int, orden: str = "fecha"):
     campo = "fecha" if orden == "fecha" else "hotel_id"
     cursor = col.find({"cliente_id": cliente_id}).sort(campo, DESCENDING)
     return [serial(r) for r in cursor]
 
-
-# ════════════════════════════════════════════════════════════
-# RF7 – Responder reseña (administrador)
-# POST /resenas/{resena_id}/respuesta
-# Body: { admin_id, texto }
-# ════════════════════════════════════════════════════════════
 @app.post("/resenas/{resena_id}/respuesta")
 def responder_resena(resena_id: str, datos: dict):
     result = col.update_one(
@@ -182,11 +139,6 @@ def responder_resena(resena_id: str, datos: dict):
         raise HTTPException(status_code=404, detail="Reseña no encontrada")
     return {"mensaje": "Respuesta publicada"}
 
-
-# ════════════════════════════════════════════════════════════
-# RF8 – Eliminar reseña (administrador)
-# DELETE /resenas/{resena_id}/admin
-# ════════════════════════════════════════════════════════════
 @app.delete("/resenas/{resena_id}/admin")
 def eliminar_resena_admin(resena_id: str):
     result = col.update_one(
@@ -197,12 +149,6 @@ def eliminar_resena_admin(resena_id: str):
         raise HTTPException(status_code=404, detail="Reseña no encontrada")
     return {"mensaje": "Reseña eliminada por administrador"}
 
-
-# ════════════════════════════════════════════════════════════
-# RF9 – Destacar reseña (solo 1 por hotel)
-# PUT /resenas/{resena_id}/destacar
-# Body: { hotel_id }
-# ════════════════════════════════════════════════════════════
 @app.put("/resenas/{resena_id}/destacar")
 def destacar_resena(resena_id: str, datos: dict):
     hotel_id = int(datos.get("hotel_id"))
@@ -215,11 +161,6 @@ def destacar_resena(resena_id: str, datos: dict):
         raise HTTPException(status_code=404, detail="Reseña no encontrada")
     return {"mensaje": "Reseña destacada"}
 
-
-# ════════════════════════════════════════════════════════════
-# RFC1 – Top 10 hoteles por calificación promedio
-# GET /analytics/top-hoteles?anio=2024
-# ════════════════════════════════════════════════════════════
 @app.get("/analytics/top-hoteles")
 def top_hoteles(anio: int = 2024):
     pipeline = [
@@ -243,11 +184,6 @@ def top_hoteles(anio: int = 2024):
     ]
     return list(col.aggregate(pipeline))
 
-
-# ════════════════════════════════════════════════════════════
-# RFC2 – Evolución mensual de un hotel
-# GET /analytics/evolucion/{hotel_id}?anio=2024
-# ════════════════════════════════════════════════════════════
 @app.get("/analytics/evolucion/{hotel_id}")
 def evolucion_hotel(hotel_id: int, anio: int = 2024):
     pipeline = [
@@ -271,11 +207,6 @@ def evolucion_hotel(hotel_id: int, anio: int = 2024):
     ]
     return list(col.aggregate(pipeline))
 
-
-# ════════════════════════════════════════════════════════════
-# RFC3 – Perfil comparativo de hoteles por ciudad
-# GET /analytics/comparativo?hotel_ids=1,2,3
-# ════════════════════════════════════════════════════════════
 @app.get("/analytics/comparativo")
 def comparativo_ciudad(hotel_ids: str):
     ids = [int(x) for x in hotel_ids.split(",")]
@@ -291,7 +222,7 @@ def comparativo_ciudad(hotel_ids: str):
         {"$addFields": {
             "calificacion_promedio": {"$round": ["$calificacion_promedio", 2]},
             "pct_con_respuesta": {"$round": [{"$multiply": [{"$divide": ["$con_respuesta", "$total_resenas"]}, 100]}, 1]},
-            "pct_destacadas":    {"$round": [{"$multiply": [{"$divide": ["$destacadas",    "$total_resenas"]}, 100]}, 1]}
+            "pct_destacadas":    {"$round": [{"$multiply": [{"$divide": ["$destacadas", "$total_resenas"]}, 100]}, 1]}
         }},
         {"$sort": {"calificacion_promedio": -1}},
         {"$project": {
