@@ -1,0 +1,44 @@
+db.createCollection("resenias", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["hotel_id", "cliente_id", "reserva_id", "calificacion", "comentario", "fecha", "estado"],
+      properties: {
+        hotel_id:     { bsonType: "int" },
+        cliente_id:   { bsonType: "int" },
+        reserva_id:   { bsonType: "int" },
+        calificacion: { bsonType: "int", minimum: 1, maximum: 5 },
+        comentario:   { bsonType: "string" },
+        fecha:        { bsonType: "date" },
+        estado:       { enum: ["PUBLICADA", "ELIMINADA"] },
+        utilidad:     { bsonType: "int", minimum: 0 },
+        destacada:    { bsonType: "bool" },
+        respuesta_admin: {
+          bsonType: "object",
+          properties: {
+            admin_id: { bsonType: "int" },
+            texto:    { bsonType: "string" },
+            fecha:    { bsonType: "date" }
+          }
+        },
+        votos_utiles: {
+          bsonType: "array",
+          items: {
+            bsonType: "object",
+            properties: {
+              usuario_id: { bsonType: "int" },
+              fecha:      { bsonType: "date" }
+            }
+          }
+        }
+      }
+    }
+  }
+})
+
+db.resenias.createIndex({ hotel_id: 1, fecha: -1 })
+db.resenias.createIndex({ hotel_id: 1, utilidad: -1 })
+db.resenias.createIndex({ cliente_id: 1, fecha: -1 })
+db.resenias.createIndex({ reserva_id: 1 }, { unique: true })
+db.resenias.createIndex({ hotel_id: 1, destacada: -1 })
+db.resenias.createIndex({ hotel_id: 1, calificacion: 1, fecha: 1 })
